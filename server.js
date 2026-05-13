@@ -1,15 +1,13 @@
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
-const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const { mongoose, TableMenu, Counter, Order } = require("./models");
 const { computeTotals } = require("./lib/orderTotals");
 const { ensureSeed } = require("./lib/seed");
-const { attachOrderWebSocket, broadcastToTable } = require("./lib/orderWs");
+const { broadcastToTable } = require("./lib/supabaseOrderBroadcast");
 
 const STATUSES = ["pending", "confirmed", "preparing", "ready", "served"];
-const WS_PATH = "/api/v1/ws/orders";
 const ORDER_STATUS_STEP_MS = Math.max(500, Number(process.env.ORDER_STATUS_STEP_MS || 4000));
 
 const app = express();
@@ -32,11 +30,15 @@ function orderDocToWire(doc) {
 }
 
 function emitOrderUpdated(tableId, orderWire) {
-  broadcastToTable(tableId, { type: "order_updated", order: orderWire });
+  broadcastToTable(tableId, { type: "order_updated", order: orderWire }).catch((e) =>
+    console.warn("emitOrderUpdated broadcast", e?.message || e)
+  );
 }
 
 function emitOrderDeleted(tableId, orderId) {
-  broadcastToTable(tableId, { type: "order_deleted", order_id: orderId });
+  broadcastToTable(tableId, { type: "order_deleted", order_id: orderId }).catch((e) =>
+    console.warn("emitOrderDeleted broadcast", e?.message || e)
+  );
 }
 
 /** Advances pending → confirmed → … → served with [ORDER_STATUS_STEP_MS] between each step. */
@@ -277,16 +279,13 @@ if (!uri) {
   process.exit(1);
 }
 
-const server = http.createServer(app);
-attachOrderWebSocket(server, WS_PATH);
-
 mongoose
   .connect(uri)
   .then(async () => {
     await ensureSeed();
-    server.listen(PORT, () => {
+    app.listen(PORT, () => {
       console.log(
-        `Mock API listening on port ${PORT} (MongoDB + WebSocket ${WS_PATH}, status step ${ORDER_STATUS_STEP_MS}ms)`
+        `Mock API listening on port ${PORT} (MongoDB + Supabase Realtime broadcast, status step ${ORDER_STATUS_STEP_MS}ms)`
       );
     });
   })
